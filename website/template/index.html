@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Freshness Analyzer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f4f6f9;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        .container {
+            margin-top: 60px;
+        }
+
+        .card {
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+        }
+
+        .card-header {
+            background-color: #2f4858;
+            color: white;
+            text-align: center;
+            padding: 1.5rem 1rem;
+            border-radius: 10px 10px 0 0;
+        }
+
+        .upload-box {
+            padding: 30px;
+            border: 2px dashed #ced4da;
+            border-radius: 8px;
+            background-color: #fff;
+            cursor: pointer;
+            text-align: center;
+        }
+
+        .upload-box:hover {
+            border-color: #2f4858;
+        }
+
+        .preview-image {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+
+        .btn-analyze {
+            background-color: #2f4858;
+            color: white;
+        }
+
+        .btn-analyze:hover {
+            background-color: #1e3440;
+        }
+
+        .feedback-form {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="card">
+        <div class="card-header">
+            <h3><i class="fas fa-leaf me-2"></i>Freshness Analyzer</h3>
+            <p class="text-light">Upload an image to analyze its freshness using AI</p>
+        </div>
+        <div class="card-body">
+            <form action="{{ url_for('predict') }}" method="POST" enctype="multipart/form-data" id="uploadForm">
+                <div class="upload-box" id="uploadArea">
+                    <i class="fas fa-upload fa-2x text-muted"></i>
+                    <p class="mt-2 text-muted">Click or drag an image to upload (JPG/PNG)</p>
+                    <input type="file" name="file" id="fileInput" class="d-none" accept="image/*" required>
+                </div>
+
+                <div id="previewContainer" class="text-center mt-3" style="display: none;">
+                    <img id="previewImage" class="preview-image" alt="Preview">
+                    <div class="mt-2">
+                        <button type="button" class="btn btn-outline-secondary" onclick="clearPreview()">Clear</button>
+                    </div>
+                </div>
+
+                <!-- Supported Fruits/Vegetables Notice -->
+                <div class="alert alert-info mt-4" role="alert">
+                    <strong>Supported Produce:</strong> Our freshness analyzer is currently optimized to evaluate a curated selection of fruits and vegetables including 
+                    <em>Apple, Banana, Bell Pepper, Bitter Gourd, Capsicum, Carrot, Cucumber, Mango, Okra, Orange, Potato, Strawberry,</em> and <em>Tomato</em>.
+                </div>
+
+                <div class="text-center mt-4">
+                    <button type="submit" class="btn btn-analyze px-4 py-2"><i class="fas fa-search me-1"></i>Analyze</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInput = document.getElementById('fileInput');
+    const previewContainer = document.getElementById('previewContainer');
+    const previewImage = document.getElementById('previewImage');
+
+    uploadArea.addEventListener('click', () => fileInput.click());
+
+    uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadArea.style.backgroundColor = '#f0f0f0';
+    });
+
+    uploadArea.addEventListener('dragleave', () => {
+        uploadArea.style.backgroundColor = '#fff';
+    });
+
+    uploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            fileInput.files = files;
+            showPreview(files[0]);
+        }
+        uploadArea.style.backgroundColor = '#fff';
+    });
+
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            showPreview(e.target.files[0]);
+        }
+    });
+
+    function showPreview(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            previewImage.src = e.target.result;
+            previewContainer.style.display = 'block';
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function clearPreview() {
+        previewImage.src = '';
+        previewContainer.style.display = 'none';
+        fileInput.value = '';
+    }
+</script>
+</body>
+</html>
