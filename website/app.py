@@ -1,3 +1,4 @@
+# --- [Your imports and initializations: unchanged] ---
 import os
 import uuid
 import math
@@ -10,9 +11,9 @@ from io import BytesIO
 from flask import Flask, request, render_template, jsonify, flash, redirect, url_for
 from werkzeug.utils import secure_filename
 import torch
-import torchvision.models as models
 import torchvision.transforms as transforms
 import joblib
+from torchvision import models
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-this'
@@ -27,9 +28,8 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(CORRECTION_FOLDER, exist_ok=True)
 
-PCA_MODEL_PATH = r"D:\\Data For Ecochoice Naturals\\FA\\pca_model.pkl"
-ENCODER_PATH = r"D:\\Data For Ecochoice Naturals\\FA\\label_encoder.pkl"
-SVM_MODEL_PATH = r"D:\\Data For Ecochoice Naturals\\FA\\svm_model.pkl"
+MODEL_PATH = r"D:\Jhumpa Final\Website\fruit_model_1200each.pth"
+ENCODER_PATH = r"D:\Jhumpa Final\Website\fruit_label_encoder.pkl"
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 IMG_SIZE = 224
@@ -40,71 +40,51 @@ transform = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-print("Loading models...")
+print("🔄 Loading model and label encoder...")
 try:
-    pca = joblib.load(PCA_MODEL_PATH)
-    encoder = joblib.load(ENCODER_PATH)
-    svm = joblib.load(SVM_MODEL_PATH)
-    print("Models loaded successfully!")
+    class_names = joblib.load(ENCODER_PATH)
+    num_classes = len(class_names)
+    model = models.efficientnet_v2_s(weights=None)
+    model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, num_classes)
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+    model = model.to(DEVICE).eval()
+    print("✅ Model loaded successfully!")
 except Exception as e:
-    print(f"Error loading models: {e}")
-    pca = encoder = svm = None
-
-def get_feature_model(base_model, layer_name):
-    model = base_model.eval().to(DEVICE)
-    if layer_name == 'avgpool':
-        return torch.nn.Sequential(*(list(model.children())[:-1]))
-    elif layer_name == 'features':
-        return model.features
-    return model
-
-print("Loading pretrained models...")
-googlenet = get_feature_model(models.googlenet(weights=models.GoogLeNet_Weights.IMAGENET1K_V1), 'avgpool')
-resnext = get_feature_model(models.resnext101_32x8d(weights=models.ResNeXt101_32X8D_Weights.IMAGENET1K_V1), 'avgpool')
-densenet = get_feature_model(models.densenet201(weights=models.DenseNet201_Weights.IMAGENET1K_V1), 'features')
-print("Pretrained models loaded!")
-
-def extract_features(model, inputs, model_type):
-    with torch.no_grad():
-        inputs = inputs.to(DEVICE)
-        feats = model(inputs)
-        if model_type == 'densenet':
-            feats = torch.nn.functional.adaptive_avg_pool2d(feats, (1, 1))
-        return feats.view(inputs.size(0), -1).cpu()
-
-def sigmoid(x):
-    return 1 / (1 + math.exp(-x))
+    print(f"❌ Error loading model: {e}")
+    model = None
+    class_names = []
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def sigmoid(x):
+    return 1 / (1 + math.exp(-x))
+
 def predict_image(image_path):
-    if pca is None or encoder is None or svm is None:
-        raise ValueError("Models not loaded properly")
+    if model is None or not class_names:
+        raise ValueError("Model or encoder not loaded properly")
 
     image = Image.open(image_path).convert("RGB")
-    image_tensor = transform(image).unsqueeze(0)
+    image_tensor = transform(image).unsqueeze(0).to(DEVICE)
 
-    f1 = extract_features(googlenet, image_tensor, 'googlenet')
-    f2 = extract_features(resnext, image_tensor, 'resnext')
-    f3 = extract_features(densenet, image_tensor, 'densenet')
-    feature_vector = torch.cat([f1, f2, f3], dim=1).numpy()
+    with torch.no_grad():
+        logits = model(image_tensor)
+        probs = torch.nn.functional.softmax(logits, dim=1)
+        predicted_idx = torch.argmax(probs, 1).item()
+        predicted_label = class_names[predicted_idx]
 
-    reduced_vector = pca.transform(feature_vector)
-    y_pred = svm.predict(reduced_vector)
-    pred_label = encoder.inverse_transform(y_pred)[0]
-
-    if pred_label.startswith("fresh"):
-        fruit = pred_label.replace("fresh", "").strip("_")
-    elif pred_label.startswith("rotten"):
-        fruit = pred_label.replace("rotten", "").strip("_")
+    # Extract fruit name
+    if predicted_label.startswith("fresh"):
+        fruit = predicted_label.replace("fresh", "").strip("_")
+    elif predicted_label.startswith("rotten"):
+        fruit = predicted_label.replace("rotten", "").strip("_")
     else:
-        fruit = pred_label
+        fruit = predicted_label
 
     if fruit.lower() == "oranges":
         fruit = "orange"
 
-    class_names = encoder.classes_
+    # Build mapping of fruit to fresh/rotten class indices
     fruit_pairs = {}
     for i, name in enumerate(class_names):
         if name.startswith("fresh"):
@@ -117,15 +97,19 @@ def predict_image(image_path):
             fruit_pairs.setdefault(fname, {})['rotten'] = i
 
     if fruit not in fruit_pairs:
-        raise ValueError(f"Unknown fruit type '{fruit}' from label '{pred_label}'")
+        raise ValueError(f"Unknown fruit type '{fruit}' from label '{predicted_label}'")
 
-    decision_scores = svm.decision_function(reduced_vector)
+    # Now calculate freshness using logit difference
     fresh_idx = fruit_pairs[fruit]['fresh']
     rotten_idx = fruit_pairs[fruit]['rotten']
-    diff = decision_scores[0][fresh_idx] - decision_scores[0][rotten_idx]
+    logit_vals = logits[0].cpu().numpy()
+    diff = logit_vals[fresh_idx] - logit_vals[rotten_idx]
     freshness_score = sigmoid(diff) * 100
 
-    return pred_label, freshness_score, fruit
+    return predicted_label, freshness_score, fruit
+
+
+# ------------------- ROUTES ----------------------
 
 @app.route('/')
 def index():
@@ -163,9 +147,7 @@ def predict():
                 status = "Rotten"
                 status_color = "danger"
 
-            corrections = {"patato": "potato",
-                           "apples" : "apple",
-                           "oranges": "orange"}
+            corrections = {"patato": "potato", "apples": "apple", "oranges": "orange"}
             fruit_cleaned = fruit.lower()
             fruit_corrected = corrections.get(fruit_cleaned, fruit_cleaned).title()
 
@@ -195,20 +177,24 @@ def predict():
 def submit_feedback():
     try:
         data = request.get_json()
-        print("[INFO] Feedback Data:", data)
+        print("[DEBUG] Feedback payload received:", data)
 
         prediction = data.get('prediction')
         image_data = data.get('image_data')
         rating = data.get('freshness_score', '111')
 
-        if not prediction or not image_data:
-            raise ValueError("Missing 'prediction' or 'image_data'")
+        # Extra debugging
+        if prediction is None:
+            raise ValueError("Missing 'prediction'")
+        if image_data is None:
+            raise ValueError("Missing 'image_data'")
 
         prediction_folder = prediction.lower().replace(" ", "")
         if ',' in image_data:
             image_data = image_data.split(',')[1]
         image_bytes = base64.b64decode(image_data)
 
+        # Save image
         folder_path = os.path.join(CORRECTION_FOLDER, prediction_folder)
         os.makedirs(folder_path, exist_ok=True)
         image_filename = f"{uuid.uuid4().hex[:12]}.jpg"
@@ -217,6 +203,7 @@ def submit_feedback():
             f.write(image_bytes)
         print(f"[✓] Feedback image saved to: {image_path}")
 
+        # Save to Excel
         excel_path = os.path.join(CORRECTION_FOLDER, 'corrections.xlsx')
         fruit = re.sub(r'^(fresh|rotten)', '', prediction_folder).title()
         df_new = pd.DataFrame([{
@@ -226,17 +213,21 @@ def submit_feedback():
             'Freshness Score (0-100)': rating,
             'User Said': 'Correct'
         }])
+
         if os.path.exists(excel_path):
             df_existing = pd.read_excel(excel_path)
             df_combined = pd.concat([df_existing, df_new], ignore_index=True)
         else:
             df_combined = df_new
+
         df_combined.to_excel(excel_path, index=False)
+        print("[✓] Feedback saved to Excel.")
         return jsonify({"success": True})
 
     except Exception as e:
-        print(f"[✗] Error in feedback save: {e}")
+        print(f"[✗] Error in submit_feedback: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.route('/submit_correction', methods=['POST'])
 def submit_correction():
@@ -277,7 +268,6 @@ def submit_correction():
         return jsonify({"success": True})
 
     except Exception as e:
-        print(f"[✗] Error in correction save: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/predict', methods=['POST'])
@@ -319,5 +309,6 @@ def api_predict():
     else:
         return jsonify({'error': 'Invalid file type'}), 400
 
+# --- START SERVER ---
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
